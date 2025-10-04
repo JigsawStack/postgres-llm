@@ -59,7 +59,7 @@ BEGIN
         'max_tokens', MAX_TOKENS
     )::TEXT;
 
-    SET http.curlopt_timeout_msec = 30000;
+    SET http.timeout_msec = 30000;
     SELECT * INTO response
     FROM http((
         'POST',

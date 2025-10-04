@@ -125,3 +125,6 @@ EXECUTE FUNCTION call_llm('Extract all text from this image.','image_description
 - [ ] Build this as a native Postgres extension
 - [ ] Add support for pre-built tasks like translation, sentiment analysis
 - [ ] Improve insert performance with better async support
+- [ ] Add retry logic on error
+- [ ] Structured output support
+- [ ] Multi-step prompts support
