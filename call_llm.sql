@@ -73,7 +73,7 @@ BEGIN
     )::http_request);
 
     IF response.status != 200 THEN
-        RAISE WARNING 'OpenAI API request failed with status %: %', response.status, response.content;
+        RAISE WARNING 'API request failed with status %: %', response.status, response.content;
         RETURN NEW;
     END IF;
 
@@ -81,7 +81,7 @@ BEGIN
         llm_result := (response.content::jsonb)->'choices'->0->'message'->>'content';
     EXCEPTION
         WHEN OTHERS THEN
-            RAISE WARNING 'Failed to parse OpenAI response: %', response.content;
+            RAISE WARNING 'Failed to parse response: %', response.content;
             RETURN NEW;
     END;
 
