@@ -1,11 +1,12 @@
 # Postgres LLM
 
-This is a dynamic Postgres trigger function that can use an LLM directly in your database for use cases like translation, classification, summarization and more.
+A dynamic Postgres trigger function that runs an LLM request directly in your database for use cases like translation, classification, summarization and more.
 
 ## Features
 - Use any OpenAI chat completion API compatible LLM
 - Reference context from any column within the same row
 - Automatically update the target column with the LLM result
+- Supports commons use cases: Translation, Sentiment Analysis, Image Analysis, Web Search, etc.
 
 Postgres requirements:
 - [http extension](https://github.com/pramsey/pgsql-http)
