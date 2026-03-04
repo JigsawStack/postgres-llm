@@ -1,5 +1,7 @@
 # Postgres LLM
 
+Read the full article: https://interfaze.ai/blog/introducing-postgres-llm-run-ai-natively-inside-postgres
+
 A dynamic Postgres trigger function that runs an LLM request directly in your database for use cases like translation, classification, summarization and more.
 
 ## Features
