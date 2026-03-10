@@ -19,7 +19,7 @@ Postgres requirements:
 ### 1. Create `call_llm` function
 - Copy the Postgres function code from [call_llm.sql](/call_llm.sql) 
 - Replace the `API_KEY`, `BASE_URL` and `MODEL_NAME` with your provider of choice. Defaults to [Interfaze](https://interfaze.ai).
-- Execute it in your database. (SQL editor tab in Supabase)
+- Execute it in your database.
 
 ### 2. Add a trigger
 
