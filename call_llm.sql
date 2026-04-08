@@ -11,42 +11,76 @@ DECLARE
     MAX_TOKENS CONSTANT INTEGER := 1000;
     
     prompt_text TEXT;
-    target_column TEXT;
-    context_column TEXT;
-    context_value TEXT;
+    target_columns TEXT[];
     request_body TEXT;
     response RECORD;
     llm_result TEXT;
+    llm_json JSONB;
+    col_name TEXT;
+    col_value TEXT;
+    row_hstore hstore;
+    placeholder TEXT;
+    col_keys TEXT[];
+    schema_properties JSONB;
+    response_format JSON;
 BEGIN
-    IF TG_ARGV[1] IS NULL THEN
-        RAISE EXCEPTION 'Second argument (target column) is required';
-    END IF;
-    target_column := TG_ARGV[1];
-
     IF TG_ARGV[0] IS NULL THEN
         RAISE EXCEPTION 'First argument (prompt) is required';
     END IF;
+
+    IF TG_ARGV[1] IS NULL THEN
+        RAISE EXCEPTION 'Second argument (target column) is required';
+    END IF;
+
+    FOR i IN 1..TG_NARGS-1 LOOP
+        target_columns := array_append(target_columns, TG_ARGV[i]);
+    END LOOP;
     
     prompt_text := TG_ARGV[0];
+    row_hstore := hstore(NEW);
+    col_keys := akeys(row_hstore);
 
-    IF TG_ARGV[2] IS NOT NULL THEN
-        context_column := TG_ARGV[2];
+    FOR i IN 1..array_length(col_keys, 1) LOOP
+        col_name := col_keys[i];
+        placeholder := '{' || col_name || '}';
         
-        BEGIN
-            context_value := (hstore(NEW) -> context_column);
-            
-            IF context_value IS NOT NULL AND context_value != '' THEN
-                prompt_text := prompt_text || ' Context: "' || context_value || '"';
+        IF position(placeholder IN prompt_text) > 0 THEN
+            col_value := row_hstore -> col_name;
+            IF col_value IS NOT NULL THEN
+                prompt_text := replace(prompt_text, placeholder, col_value);
+            ELSE
+                prompt_text := replace(prompt_text, placeholder, '');
             END IF;
-        EXCEPTION
-            WHEN OTHERS THEN
-                RAISE WARNING 'Failed to read context column %: %', context_column, SQLERRM;
-        END;
-    END IF;
+        END IF;
+    END LOOP;
 
     IF prompt_text IS NULL OR prompt_text = '' THEN
         RAISE EXCEPTION 'Prompt text cannot be null or empty';
     END IF;
+
+    prompt_text := prompt_text || E'\n\nReturn a JSON object with exactly these keys: '
+        || array_to_string(target_columns, ', ');
+
+    schema_properties := '{}'::jsonb;
+    FOR i IN 1..array_length(target_columns, 1) LOOP
+        schema_properties := schema_properties || jsonb_build_object(
+            target_columns[i], jsonb_build_object('type', 'string')
+        );
+    END LOOP;
+
+    response_format := json_build_object(
+        'type', 'json_schema',
+        'json_schema', json_build_object(
+            'name', 'column_values',
+            'strict', true,
+            'schema', json_build_object(
+                'type', 'object',
+                'properties', schema_properties::json,
+                'required', to_json(target_columns),
+                'additionalProperties', false
+            )
+        )
+    );
 
     request_body := json_build_object(
         'model', MODEL_NAME,
@@ -56,7 +90,8 @@ BEGIN
                 'content', prompt_text
             )
         ),
-        'max_tokens', MAX_TOKENS
+        'max_tokens', MAX_TOKENS,
+        'response_format', response_format
     )::TEXT;
 
     SET http.timeout_msec = 30000;
@@ -86,10 +121,21 @@ BEGIN
     END;
 
     BEGIN
-        NEW := NEW #= hstore(target_column, llm_result);
+        llm_json := llm_result::jsonb;
     EXCEPTION
         WHEN OTHERS THEN
-            RAISE WARNING 'Failed to update column %: %', target_column, SQLERRM;
+            RAISE WARNING 'LLM returned invalid JSON: %', llm_result;
+            RETURN NEW;
+    END;
+
+    BEGIN
+        FOR i IN 1..array_length(target_columns, 1) LOOP
+            col_value := llm_json ->> target_columns[i];
+            NEW := NEW #= hstore(target_columns[i], col_value);
+        END LOOP;
+    EXCEPTION
+        WHEN OTHERS THEN
+            RAISE WARNING 'Failed to update columns: %', SQLERRM;
     END;
 
     RETURN NEW;
