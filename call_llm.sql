@@ -7,7 +7,7 @@ DECLARE
     -- Customizable variables or can be referenced from environment variables/Vault
     API_KEY CONSTANT TEXT := '<your-api-key>'; -- Get your api key from https://interfaze.ai/dashboard
     BASE_URL CONSTANT TEXT := 'https://api.interfaze.ai/v1/chat/completions';
-    MODEL_NAME CONSTANT TEXT := 'interfaze-alpha';
+    MODEL_NAME CONSTANT TEXT := 'interfaze-beta';
     MAX_TOKENS CONSTANT INTEGER := 1000;
     
     prompt_text TEXT;
