@@ -6,22 +6,24 @@ A dynamic Postgres trigger function that runs an LLM request directly in your da
 
 ## Features
 
-- Use any OpenAI chat completion API compatible LLM
+- Async execution - non-blocking, model runs async
+- Use any Chat completion API compatible LLM
 - Reference context from any column within the same row
-- Automatically update one or more target columns with the LLM result
+- Automatically update multiple target columns
 - Uses OpenAI-compatible JSON schema structured output for reliable responses
-- Supports commons use cases: Translation, Sentiment Analysis, Image Analysis, Web Search, etc.
+- Built-in retry logic with configurable max attempts
 
 Postgres requirements:
 
 - [http extension](https://github.com/pramsey/pgsql-http)
 - [hstore extension](https://www.postgresql.org/docs/current/hstore.html)
+- [pg_cron extension](https://github.com/citusdata/pg_cron)
 
 ## Quick Start
 
-### 1. Create `call_llm` function
+### 1. Run `init.sql`
 
-- Copy the Postgres function code from [call_llm.sql](/call_llm.sql)
+- Copy the Postgres setup code from [init.sql](/init.sql)
 - Replace the `API_KEY`, `BASE_URL` and `MODEL_NAME` with your provider of choice. Defaults to [Interfaze](https://interfaze.ai).
 - Execute it in your database.
 
@@ -45,10 +47,10 @@ Example trigger for sentiment analysis:
 ```sql
 DROP TRIGGER IF EXISTS analyze_sentiment ON user_reviews;
 CREATE TRIGGER analyze_sentiment
-BEFORE INSERT OR UPDATE OF review_text ON user_reviews
+AFTER INSERT OR UPDATE OF review_text ON user_reviews
 FOR EACH ROW
 WHEN (NEW.review_text IS NOT NULL)
-EXECUTE FUNCTION call_llm('Analyze the sentiment of this text and respond with only "positive", "negative", or "neutral". return value in lowercase. Text: {review_text}','sentiment');
+EXECUTE FUNCTION llm.call('Analyze the sentiment of this text and respond with only "positive", "negative", or "neutral". return value in lowercase. Text: {review_text}','sentiment');
 ```
 
 ### 3. Insert a new row:
@@ -56,6 +58,8 @@ EXECUTE FUNCTION call_llm('Analyze the sentiment of this text and respond with o
 ```sql
 INSERT INTO user_reviews (review_text) VALUES ('I love this hackathon, I can build anything I want!!!!') RETURNING *;
 ```
+
+The INSERT returns immediately. The `sentiment` column will be populated asynchronously by the pg_cron worker within seconds.
 
 ## Call LLM function parameters
 
@@ -66,14 +70,14 @@ INSERT INTO user_reviews (review_text) VALUES ('I love this hackathon, I can bui
 
 ```sql
 -- Single column
-call_llm('<prompt>','<target_column>');
+llm.call('<prompt>','<target_column>');
 
-call_llm('Extract all text from this image: {image_url}','image_description');
+llm.call('Extract all text from this image: {image_url}','image_description');
 
 -- Multiple columns
-call_llm('<prompt>','<target_column_1>','<target_column_2>','<target_column_3>');
+llm.call('<prompt>','<target_column_1>','<target_column_2>','<target_column_3>');
 
-call_llm('Analyze the sentiment and translate the following review to Spanish. Text: {user_review_og}','emotion','user_review_es');
+llm.call('Analyze the sentiment and translate the following review to Spanish. Text: {user_review_og}','emotion','user_review_es');
 ```
 
 The function uses [OpenAI JSON schema structured output](https://platform.openai.com/docs/guides/structured-outputs) (`response_format` with `type: json_schema`) to ensure the LLM returns a valid JSON object with exactly the specified target column names as keys.
@@ -82,15 +86,17 @@ The function uses [OpenAI JSON schema structured output](https://platform.openai
 
 This trigger will be executed only if an insert or change happens to a specific column in a specific table and if that column is not null.
 
+The trigger enqueues a job into `llm.queue` and returns immediately.
+
 ```sql
 DROP TRIGGER IF EXISTS <trigger_name> ON <table_name>;
 CREATE TRIGGER <trigger_name>
-BEFORE INSERT OR UPDATE OF <column_name> ON <table_name>
+AFTER INSERT OR UPDATE OF <column_name> ON <table_name>
 FOR EACH ROW
 WHEN (NEW.<column_name> IS NOT NULL)
-EXECUTE FUNCTION call_llm('<prompt with {column} placeholders>','<target_column>');
+EXECUTE FUNCTION llm.call('<prompt with {column} placeholders>','<target_column>');
 -- or with multiple target columns:
-EXECUTE FUNCTION call_llm('<prompt with {column} placeholders>','<target_column_1>','<target_column_2>');
+EXECUTE FUNCTION llm.call('<prompt with {column} placeholders>','<target_column_1>','<target_column_2>');
 ```
 
 Example use cases:
@@ -101,40 +107,40 @@ All examples are based on this example schema in [user_reviews.sql](/example/use
 
 ```sql
 CREATE TRIGGER translate_es
-BEFORE INSERT OR UPDATE OF user_review_og ON user_reviews
+AFTER INSERT OR UPDATE OF user_review_og ON user_reviews
 FOR EACH ROW
 WHEN (NEW.user_review_og IS NOT NULL)
-EXECUTE FUNCTION call_llm('Translate the following text to spanish (es). Only return the spanish text with no additional text. Text: {user_review_og}','user_review_es');
+EXECUTE FUNCTION llm.call('Translate the following text to spanish (es). Only return the spanish text with no additional text. Text: {user_review_og}','user_review_es');
 ```
 
 ### Sentiment analysis
 
 ```sql
 CREATE TRIGGER analyze_sentiment
-BEFORE INSERT OR UPDATE OF user_review_og ON user_reviews
+AFTER INSERT OR UPDATE OF user_review_og ON user_reviews
 FOR EACH ROW
 WHEN (NEW.user_review_og IS NOT NULL)
-EXECUTE FUNCTION call_llm('Analyze the sentiment of this text and respond with only "positive", "negative", or "neutral". return value in lowercase. Text: {user_review_og}','emotion');
+EXECUTE FUNCTION llm.call('Analyze the sentiment of this text and respond with only "positive", "negative", or "neutral". return value in lowercase. Text: {user_review_og}','emotion');
 ```
 
 ### Web search
 
 ```sql
 CREATE TRIGGER background_search
-BEFORE INSERT OR UPDATE OF full_name ON user_reviews
+AFTER INSERT OR UPDATE OF full_name ON user_reviews
 FOR EACH ROW
 WHEN (NEW.full_name IS NOT NULL)
-EXECUTE FUNCTION call_llm('Give a summary background on {full_name}.','user_background');
+EXECUTE FUNCTION llm.call('Give a summary background on {full_name}.','user_background');
 ```
 
 ### Image vision OCR
 
 ```sql
 CREATE TRIGGER vision_ocr
-BEFORE INSERT OR UPDATE OF attached_image_url ON user_reviews
+AFTER INSERT OR UPDATE OF attached_image_url ON user_reviews
 FOR EACH ROW
 WHEN (NEW.attached_image_url IS NOT NULL)
-EXECUTE FUNCTION call_llm('Extract all text from this image: {attached_image_url}','image_description');
+EXECUTE FUNCTION llm.call('Extract all text from this image: {attached_image_url}','image_description');
 ```
 
 ### Multi-column: Sentiment analysis + Translation
@@ -143,19 +149,12 @@ A single trigger can populate multiple columns at once from one LLM call:
 
 ```sql
 CREATE TRIGGER analyze_and_translate
-BEFORE INSERT OR UPDATE OF user_review_og ON user_reviews
+AFTER INSERT OR UPDATE OF user_review_og ON user_reviews
 FOR EACH ROW
 WHEN (NEW.user_review_og IS NOT NULL)
-EXECUTE FUNCTION call_llm(
+EXECUTE FUNCTION llm.call(
     'Analyze the sentiment and translate the following review to Spanish. Text: {user_review_og}',
     'emotion',
     'user_review_es'
 );
 ```
-
-## Todo
-
-- [ ] Build this as a native Postgres extension
-- [ ] Improve insert performance with better async support
-- [ ] Add retry logic on error
-- [x] Structured output support
