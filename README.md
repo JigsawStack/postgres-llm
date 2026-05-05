@@ -10,7 +10,6 @@ A dynamic Postgres trigger function that runs an LLM request directly in your da
 - Use any Chat completion API compatible LLM
 - Reference context from any column within the same row
 - Automatically update multiple target columns
-- Uses OpenAI-compatible JSON schema structured output for reliable responses
 - Built-in retry logic with configurable max attempts
 
 Postgres requirements:
@@ -80,7 +79,7 @@ llm.call('<prompt>','<target_column_1>','<target_column_2>','<target_column_3>')
 llm.call('Analyze the sentiment and translate the following review to Spanish. Text: {user_review_og}','emotion','user_review_es');
 ```
 
-The function uses [OpenAI JSON schema structured output](https://platform.openai.com/docs/guides/structured-outputs) (`response_format` with `type: json_schema`) to ensure the LLM returns a valid JSON object with exactly the specified target column names as keys.
+The function uses [JSON schema structured output](https://interfaze.ai/docs/structured-output) (`response_format` with `type: json_schema`) to ensure the LLM returns a valid JSON object with exactly the specified target column names as keys.
 
 ## Trigger Format
 
