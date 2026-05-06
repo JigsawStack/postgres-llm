@@ -20,86 +20,6 @@ CREATE TABLE IF NOT EXISTS llm.queue (
     processed_at   timestamptz
 );
 
-CREATE INDEX IF NOT EXISTS queue_pending_idx
-    ON llm.queue (created_at) WHERE status = 'pending';
-CREATE INDEX IF NOT EXISTS queue_dedup_idx
-    ON llm.queue (table_schema, table_name, row_pk) WHERE status = 'pending';
-
--- Trigger function: enqueues an LLM job for async processing
-CREATE OR REPLACE FUNCTION llm.call()
-RETURNS TRIGGER AS $$
-DECLARE
-    target_columns TEXT[];
-    row_hstore hstore;
-    prompt_vals hstore;
-    pk_cols TEXT[];
-    pk_jsonb JSONB;
-    col_name TEXT;
-    col_val TEXT;
-    matches TEXT[];
-BEGIN
-    IF TG_ARGV[0] IS NULL THEN
-        RAISE EXCEPTION 'First argument (prompt) is required';
-    END IF;
-
-    IF TG_ARGV[1] IS NULL THEN
-        RAISE EXCEPTION 'Second argument (target column) is required';
-    END IF;
-
-    FOR i IN 1..TG_NARGS-1 LOOP
-        target_columns := array_append(target_columns, TG_ARGV[i]);
-    END LOOP;
-
-    row_hstore := hstore(NEW);
-
-    -- Extract only the columns referenced in the prompt as {column_name}
-    prompt_vals := ''::hstore;
-    SELECT array_agg(m[1]) INTO matches
-    FROM regexp_matches(TG_ARGV[0], '\{(\w+)\}', 'g') AS m;
-
-    IF matches IS NOT NULL THEN
-        FOR i IN 1..array_length(matches, 1) LOOP
-            col_name := matches[i];
-            IF NOT row_hstore ? col_name THEN
-                RAISE EXCEPTION 'Column {%} referenced in prompt does not exist in table %.%', col_name, TG_TABLE_SCHEMA, TG_TABLE_NAME;
-            END IF;
-            prompt_vals := prompt_vals || hstore(col_name, row_hstore -> col_name);
-        END LOOP;
-    END IF;
-
-    SELECT array_agg(a.attname ORDER BY a.attnum)
-    INTO pk_cols
-    FROM pg_index i
-    JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-    WHERE i.indrelid = TG_RELID AND i.indisprimary;
-
-    IF pk_cols IS NULL THEN
-        RAISE EXCEPTION 'Table %.% has no primary key — llm.call requires one', TG_TABLE_SCHEMA, TG_TABLE_NAME;
-    END IF;
-
-    pk_jsonb := '{}'::jsonb;
-    FOR i IN 1..array_length(pk_cols, 1) LOOP
-        col_name := pk_cols[i];
-        col_val := row_hstore -> col_name;
-        pk_jsonb := pk_jsonb || jsonb_build_object(col_name, col_val);
-    END LOOP;
-
-    UPDATE llm.queue
-    SET prompt_values = prompt_vals, created_at = now()
-    WHERE table_schema = TG_TABLE_SCHEMA
-      AND table_name = TG_TABLE_NAME
-      AND row_pk = pk_jsonb
-      AND status = 'pending';
-
-    IF NOT FOUND THEN
-        INSERT INTO llm.queue (table_schema, table_name, row_pk, prompt_values, prompt, target_columns)
-        VALUES (TG_TABLE_SCHEMA, TG_TABLE_NAME, pk_jsonb, prompt_vals, TG_ARGV[0], target_columns);
-    END IF;
-
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
 -- Worker function: processes pending LLM jobs in batches
 CREATE OR REPLACE FUNCTION llm.process_queue(batch_size INT DEFAULT 10)
 RETURNS INT AS $$
@@ -253,6 +173,86 @@ BEGIN
     RETURN processed;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Trigger function: enqueues an LLM job for async processing
+CREATE OR REPLACE FUNCTION llm.call()
+RETURNS TRIGGER AS $$
+DECLARE
+    target_columns TEXT[];
+    row_hstore hstore;
+    prompt_vals hstore;
+    pk_cols TEXT[];
+    pk_jsonb JSONB;
+    col_name TEXT;
+    col_val TEXT;
+    matches TEXT[];
+BEGIN
+    IF TG_ARGV[0] IS NULL THEN
+        RAISE EXCEPTION 'First argument (prompt) is required';
+    END IF;
+
+    IF TG_ARGV[1] IS NULL THEN
+        RAISE EXCEPTION 'Second argument (target column) is required';
+    END IF;
+
+    FOR i IN 1..TG_NARGS-1 LOOP
+        target_columns := array_append(target_columns, TG_ARGV[i]);
+    END LOOP;
+
+    row_hstore := hstore(NEW);
+
+    -- Extract only the columns referenced in the prompt as {column_name}
+    prompt_vals := ''::hstore;
+    SELECT array_agg(m[1]) INTO matches
+    FROM regexp_matches(TG_ARGV[0], '\{(\w+)\}', 'g') AS m;
+
+    IF matches IS NOT NULL THEN
+        FOR i IN 1..array_length(matches, 1) LOOP
+            col_name := matches[i];
+            IF NOT row_hstore ? col_name THEN
+                RAISE EXCEPTION 'Column {%} referenced in prompt does not exist in table %.%', col_name, TG_TABLE_SCHEMA, TG_TABLE_NAME;
+            END IF;
+            prompt_vals := prompt_vals || hstore(col_name, row_hstore -> col_name);
+        END LOOP;
+    END IF;
+
+    SELECT array_agg(a.attname ORDER BY a.attnum)
+    INTO pk_cols
+    FROM pg_index i
+    JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+    WHERE i.indrelid = TG_RELID AND i.indisprimary;
+
+    IF pk_cols IS NULL THEN
+        RAISE EXCEPTION 'Table %.% has no primary key — llm.call requires one', TG_TABLE_SCHEMA, TG_TABLE_NAME;
+    END IF;
+
+    pk_jsonb := '{}'::jsonb;
+    FOR i IN 1..array_length(pk_cols, 1) LOOP
+        col_name := pk_cols[i];
+        col_val := row_hstore -> col_name;
+        pk_jsonb := pk_jsonb || jsonb_build_object(col_name, col_val);
+    END LOOP;
+
+    UPDATE llm.queue
+    SET prompt_values = prompt_vals, created_at = now()
+    WHERE table_schema = TG_TABLE_SCHEMA
+      AND table_name = TG_TABLE_NAME
+      AND row_pk = pk_jsonb
+      AND status = 'pending';
+
+    IF NOT FOUND THEN
+        INSERT INTO llm.queue (table_schema, table_name, row_pk, prompt_values, prompt, target_columns)
+        VALUES (TG_TABLE_SCHEMA, TG_TABLE_NAME, pk_jsonb, prompt_vals, TG_ARGV[0], target_columns);
+    END IF;
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE INDEX IF NOT EXISTS queue_pending_idx
+    ON llm.queue (created_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS queue_dedup_idx
+    ON llm.queue (table_schema, table_name, row_pk) WHERE status = 'pending';
 
 -- Schedule the worker to process pending jobs every 5 seconds
 SELECT cron.schedule('llm-worker', '5 seconds', $$SELECT llm.process_queue(20)$$);
